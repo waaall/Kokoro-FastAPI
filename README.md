@@ -346,6 +346,7 @@ English:
 - GPU 不生效：确认已安装 NVIDIA 驱动插件并启用 Docker 的 NVIDIA runtime
 - 想固定版本：将 `:latest` 改为固定 tag（如 `:v0.2.4-zh`）
 - 挂载目录权限错误（`Permission denied`）：见下方"权限问题"说明
+- 国内网络问题，主要会卡在 huggingface 可以把 Dockerfile `ENV DOWNLOAD_MODEL=false`，然后自己设置 hf-mirror下载到指定位置，再docker compose修改映射。
 
 English:
 
