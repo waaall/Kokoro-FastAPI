@@ -10,8 +10,17 @@ RUN apt-get update -y &&  \
     curl -LsSf https://astral.sh/uv/install.sh | sh && \
     mv /root/.local/bin/uv /usr/local/bin/ && \
     mv /root/.local/bin/uvx /usr/local/bin/ && \
-    useradd -m -u 1000 appuser && \
-    mkdir -p /app/api/src/models/v1_0 && \
+        if getent passwd 1000 >/dev/null; then \
+            EXISTING_USER="$(getent passwd 1000 | cut -d: -f1)"; \
+            if [ "$EXISTING_USER" != "appuser" ]; then usermod -l appuser "$EXISTING_USER"; fi; \
+            usermod -d /home/appuser -m appuser || true; \
+        else \
+            useradd -m -u 1000 appuser; \
+        fi && \
+        APP_GID="$(id -g appuser)" && \
+        getent group appuser >/dev/null || groupadd -g "$APP_GID" -o appuser && \
+        usermod -g appuser appuser && \
+    mkdir -p /app/api/src/models/v1_1_zh /app/api/src/voices/v1_1_zh && \
     chown -R appuser:appuser /app
 
 USER appuser
@@ -32,14 +41,6 @@ COPY --chown=appuser:appuser pyproject.toml ./pyproject.toml
 RUN uv venv --python 3.10 && \
     uv sync --extra cpu --no-cache
 
-# Japanese support requires the UniDic dictionary (~526MB on disk) for fugashi/MeCab.
-# Enabled by default; set --build-arg INCLUDE_JAPANESE=false to skip and shave the image.
-# Keep true. Setting false silently breaks ja generation.
-ARG INCLUDE_JAPANESE=true
-RUN if [ "$INCLUDE_JAPANESE" = "true" ]; then \
-        .venv/bin/python -m unidic download; \
-    fi
-
 # Copy project files including models
 COPY --chown=appuser:appuser api ./api
 COPY --chown=appuser:appuser web ./web
@@ -51,6 +52,10 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app:/app/api \
     UV_LINK_MODE=copy \
     USE_GPU=false \
+    REPO_ID=hexgrad/Kokoro-82M-v1.1-zh \
+    DEFAULT_VOICE=zf_094 \
+    KOKORO_V1_FILE=v1_1_zh/kokoro-v1_1-zh.pth \
+    VOICES_DIR=/app/api/src/voices/v1_1_zh \
     PHONEMIZER_ESPEAK_PATH=/usr/bin \
     PHONEMIZER_ESPEAK_DATA=/usr/share/espeak-ng-data \
     ESPEAK_DATA_PATH=/usr/share/espeak-ng-data \
@@ -59,7 +64,7 @@ ENV PYTHONUNBUFFERED=1 \
 ENV DOWNLOAD_MODEL=true
 # Download model if enabled
 RUN if [ "$DOWNLOAD_MODEL" = "true" ]; then \
-    python download_model.py --output api/src/models/v1_0; \
+    python download_model.py --output api/src/models/v1_1_zh --voices-output api/src/voices/v1_1_zh; \
     fi
 
 # Run FastAPI server through entrypoint.sh

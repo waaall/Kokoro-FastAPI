@@ -1,8 +1,11 @@
-from email.policy import default
+"""API 请求/响应结构定义。"""
+
 from enum import Enum
 from typing import List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
+
+from ..core.config import settings
 
 
 class VoiceCombineRequest(BaseModel):
@@ -82,7 +85,8 @@ class OpenAISpeechRequest(BaseModel):
     )
     input: str = Field(..., description="The text to generate audio for")
     voice: str = Field(
-        default="af_heart",
+        # 默认语音跟随 Settings，避免切换模型版本后 schema 仍指向旧语音。
+        default=settings.default_voice,
         description="The voice to use for generation. Can be a base voice or a combined voice name.",
     )
     response_format: Literal["mp3", "opus", "aac", "flac", "wav", "pcm"] = Field(
@@ -132,7 +136,8 @@ class CaptionedSpeechRequest(BaseModel):
     )
     input: str = Field(..., description="The text to generate audio for")
     voice: str = Field(
-        default="af_heart",
+        # 默认语音跟随 Settings，避免 captioned speech 与普通 speech 默认值不一致。
+        default=settings.default_voice,
         description="The voice to use for generation. Can be a base voice or a combined voice name.",
     )
     response_format: Literal["mp3", "opus", "aac", "flac", "wav", "pcm"] = Field(

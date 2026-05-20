@@ -35,7 +35,7 @@ def mock_openai_mappings():
     with patch(
         "api.src.routers.openai_compatible._openai_mappings",
         {
-            "models": {"tts-1": "kokoro-v1_0", "tts-1-hd": "kokoro-v1_0"},
+            "models": {"tts-1": "kokoro-v1_1-zh", "tts-1-hd": "kokoro-v1_1-zh"},
             "voices": {"alloy": "am_adam", "nova": "bf_isabella"},
         },
     ):
@@ -78,12 +78,13 @@ def test_list_models(mock_openai_mappings):
     data = response.json()
     assert data["object"] == "list"
     assert isinstance(data["data"], list)
+    assert len(data["data"]) == 3  # tts-1, tts-1-hd, and kokoro
+
     # Verify all expected models are present
     model_ids = [model["id"] for model in data["data"]]
     assert "tts-1" in model_ids
     assert "tts-1-hd" in model_ids
     assert "kokoro" in model_ids
-    assert "gpt-4o-mini-tts" in model_ids
 
     # Verify model format
     for model in data["data"]:

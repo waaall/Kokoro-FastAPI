@@ -1,5 +1,3 @@
-import tempfile
-from pathlib import Path
 from unittest.mock import ANY, MagicMock, patch
 
 import numpy as np
@@ -20,6 +18,7 @@ def test_initial_state(kokoro_backend):
     assert not kokoro_backend.is_loaded
     assert kokoro_backend._model is None
     assert kokoro_backend._pipelines == {}  # Now using dict of pipelines
+    assert kokoro_backend._voice_cache == {}
     # Device should be set based on settings
     assert kokoro_backend.device in ["cuda", "cpu", "mps"]
 
@@ -47,6 +46,13 @@ def test_clear_memory(mock_sync, mock_clear, kokoro_backend):
         kokoro_backend._clear_memory()
         mock_clear.assert_called_once()
         mock_sync.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_load_model_validation(kokoro_backend):
+    """Test model loading validation."""
+    with pytest.raises(RuntimeError, match="Failed to load Kokoro model"):
+        await kokoro_backend.load_model("nonexistent_model.pth")
 
 
 def test_unload_with_pipelines(kokoro_backend):
@@ -98,7 +104,10 @@ def test_get_pipeline_creates_new(kokoro_backend):
 
         # Should create new pipeline with correct params
         mock_kpipeline.assert_called_once_with(
-            lang_code="e", model=kokoro_backend._model, device=kokoro_backend._device
+            lang_code="e",
+            model=kokoro_backend._model,
+            device=kokoro_backend._device,
+            repo_id="hexgrad/Kokoro-82M-v1.1-zh",
         )
         assert pipeline_e == mock_pipeline
         assert kokoro_backend._pipelines["e"] == mock_pipeline
@@ -134,8 +143,10 @@ async def test_generate_uses_correct_pipeline(kokoro_backend):
     with (
         patch("api.src.core.paths.load_voice_tensor") as mock_load_voice,
         patch("api.src.core.paths.save_voice_tensor"),
+        patch("tempfile.gettempdir") as mock_tempdir,
     ):
         mock_load_voice.return_value = torch.ones(1)
+        mock_tempdir.return_value = "/tmp"
 
         # Mock KPipeline
         mock_pipeline = MagicMock()
@@ -145,16 +156,16 @@ async def test_generate_uses_correct_pipeline(kokoro_backend):
             async for _ in kokoro_backend.generate("test", "ef_voice", lang_code="e"):
                 pass
 
-            # Should create pipeline with Spanish lang_code and call it.
+            # Should create pipeline with Spanish lang_code
             assert "e" in kokoro_backend._pipelines
+            # Use ANY to match the temp file path since it's dynamic
             mock_pipeline.assert_called_with(
                 "test",
-                voice=ANY,
+                voice=ANY,  # Don't check exact path since it's dynamic
                 speed=1.0,
                 model=kokoro_backend._model,
             )
-            # Voice was staged to a temp file with the expected basename in
-            # the OS temp dir (cross-platform: don't string-match separators).
-            voice_arg = Path(mock_pipeline.call_args[1]["voice"])
-            assert voice_arg.name == "temp_voice_ef_voice"
-            assert voice_arg.parent == Path(tempfile.gettempdir())
+            # Verify the voice path is a temp file path
+            call_args = mock_pipeline.call_args
+            assert isinstance(call_args[1]["voice"], str)
+            assert call_args[1]["voice"].startswith("/tmp/temp_voice_")

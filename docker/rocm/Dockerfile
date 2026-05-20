@@ -28,11 +28,20 @@ RUN apt-get update && apt upgrade -y && apt-get install -y --no-install-recommen
     && mv /root/.local/bin/uvx /usr/local/bin/ \
 
     # Create non-root user and set up directories and permissions
-    && useradd -m -u 1001 appuser \
-    && mkdir -p /app/api/src/models/v1_0 \
+        && if getent passwd 1000 >/dev/null; then \
+                 EXISTING_USER="$(getent passwd 1000 | cut -d: -f1)"; \
+                 if [ "$EXISTING_USER" != "appuser" ]; then usermod -l appuser "$EXISTING_USER"; fi; \
+                 usermod -d /home/appuser -m appuser || true; \
+             else \
+                 useradd -m -u 1000 appuser; \
+             fi \
+        && APP_GID="$(id -g appuser)" \
+        && getent group appuser >/dev/null || groupadd -g "$APP_GID" -o appuser \
+        && usermod -g appuser appuser \
+    && mkdir -p /app/api/src/models/v1_1_zh /app/api/src/voices/v1_1_zh \
     && chown -R appuser:appuser /app \
     # Models folder
-    && mkdir -p /app/api/src/models/v1_0
+    && mkdir -p /app/api/src/models/v1_1_zh
 
 USER appuser
 WORKDIR /app
@@ -48,14 +57,6 @@ ENV PHONEMIZER_ESPEAK_PATH=/usr/bin \
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv venv --python 3.12 && \
     uv sync --extra rocm
-
-# Japanese support requires the UniDic dictionary (~526MB on disk) for fugashi/MeCab.
-# Enabled by default; set --build-arg INCLUDE_JAPANESE=false to skip and shave the image.
-# Keep true. Setting false silently breaks ja generation.
-ARG INCLUDE_JAPANESE=true
-RUN if [ "$INCLUDE_JAPANESE" = "true" ]; then \
-        .venv/bin/python -m unidic download; \
-    fi
 
 # Run kdb files (shape files for MIOpen)
 ENV ROCM_VERSION=6.4.4
@@ -83,6 +84,10 @@ ENV PYTHONUNBUFFERED=1 \
     PATH="/app/.venv/bin:$PATH" \
     UV_LINK_MODE=copy \
     USE_GPU=true \
+    REPO_ID=hexgrad/Kokoro-82M-v1.1-zh \
+    DEFAULT_VOICE=zf_094 \
+    KOKORO_V1_FILE=v1_1_zh/kokoro-v1_1-zh.pth \
+    VOICES_DIR=/app/api/src/voices/v1_1_zh \
     DOWNLOAD_MODEL=true \
     DEVICE="gpu"
 

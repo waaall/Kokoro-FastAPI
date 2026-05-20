@@ -14,10 +14,6 @@ on:
         required: true
         type: string
 
-concurrency:
-  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.branch_name || github.ref_name }}
-  cancel-in-progress: false
-
 jobs:
   prepare-release:
     runs-on: ubuntu-24.04
@@ -100,6 +96,19 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ needs.prepare-release.outputs.source_ref }}
+          fetch-depth: 0 # Needed to check for existing tags
+
+      - name: Check if tag already exists
+        run: |
+          TAG_NAME="${{ needs.prepare-release.outputs.version_tag }}"
+          echo "Checking for existing tag: $TAG_NAME"
+          git fetch --tags
+          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            echo "::error::Tag $TAG_NAME already exists. Please increment the version in the VERSION file."
+            exit 1
+          else
+            echo "Tag $TAG_NAME does not exist. Proceeding with release."
+          fi
 
       - name: Free disk space
         run: |
@@ -115,7 +124,7 @@ jobs:
         uses: docker/setup-buildx-action@v3 # Use v3
         with:
           driver-opts: |
-            image=moby/buildkit:v0.21.1
+            image=moby/buildkit:latest
             network=host
 
       - name: Log in to GitHub Container Registry
@@ -136,9 +145,7 @@ jobs:
           TARGET="${BUILD_TARGET}-$(echo ${PLATFORM} | cut -d'/' -f2)"
           echo "Using bake target: $TARGET"
 
-          docker buildx bake $TARGET --push --progress=plain \
-            --set "*.cache-from=type=gha,scope=${TARGET}" \
-            --set "*.cache-to=type=gha,mode=max,scope=${TARGET}"
+          docker buildx bake $TARGET --push --progress=plain
 
   create-manifests:
     needs: [prepare-release, build-images]
@@ -168,7 +175,7 @@ jobs:
           OWNER="${{ env.OWNER }}"
           REPO="${{ env.REPO }}"
 
-          # ROCm is x86-only, so the manifest references just the amd64 image.
+          # ROCm 仅发布 amd64；CPU/GPU 发布 amd64+arm64 manifest。
           if [[ "$TARGET" == "rocm" ]]; then
             SOURCES=("${REGISTRY}/${OWNER}/${REPO}-${TARGET}:${VERSION_TAG}-amd64")
           else
@@ -182,7 +189,6 @@ jobs:
             ${REGISTRY}/${OWNER}/${REPO}-${TARGET}:${VERSION_TAG} \
             "${SOURCES[@]}"
 
-          # Publish :latest only for clean release tags (no branch suffix).
           if [[ "$VERSION_TAG" != *"-"* ]]; then
             docker buildx imagetools create -t \
               ${REGISTRY}/${OWNER}/${REPO}-${TARGET}:latest \
@@ -198,6 +204,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          ref: ${{ needs.prepare-release.outputs.source_ref }}
           fetch-depth: 0
 
       - name: Create GitHub Release

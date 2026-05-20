@@ -1,6 +1,7 @@
 """Clean Kokoro implementation with controlled resource management."""
 
 import os
+import tempfile
 from typing import AsyncGenerator, Dict, Optional, Tuple, Union
 
 import numpy as np
@@ -36,6 +37,7 @@ class KokoroV1(BaseModelBackend):
         Returns:
             Voice tensor on the target device
         """
+        # 中文适配不需要牺牲语音缓存；同一 voice 在同一设备上复用张量，减少磁盘 I/O。
         cache_key = f"{voice_path}:{self._device}"
         if cache_key not in self._voice_cache:
             self._voice_cache[cache_key] = await paths.load_voice_tensor(
@@ -43,6 +45,17 @@ class KokoroV1(BaseModelBackend):
             )
             logger.debug(f"Cached voice tensor from {voice_path}")
         return self._voice_cache[cache_key]
+
+    async def _stage_voice_file_for_pipeline(self, voice_path: str) -> str:
+        """Stage a voice tensor to a temp file for KPipeline file-path loading."""
+        voice_tensor = await self._get_voice_tensor(voice_path)
+        temp_path = os.path.join(
+            tempfile.gettempdir(), f"temp_voice_{os.path.basename(voice_path)}"
+        )
+        # KPipeline 需要文件路径；仅在缺失时写入，避免每次请求重复写同一临时文件。
+        if not os.path.exists(temp_path):
+            await paths.save_voice_tensor(voice_tensor, temp_path)
+        return temp_path
 
     async def load_model(self, path: str) -> None:
         """Load pre-baked model.
@@ -66,7 +79,9 @@ class KokoroV1(BaseModelBackend):
             logger.info(f"Model path: {model_path}")
 
             # Load model and let KModel handle device mapping
-            self._model = KModel(config=config_path, model=model_path).eval()
+            self._model = KModel(
+                config=config_path, model=model_path, repo_id=settings.repo_id
+            ).eval()
             # For MPS, manually move ISTFT layers to CPU while keeping rest on MPS
             if self._device == "mps":
                 logger.info(
@@ -83,6 +98,10 @@ class KokoroV1(BaseModelBackend):
         except Exception as e:
             raise RuntimeError(f"Failed to load Kokoro model: {e}")
 
+    def _en_callable(self, text: str) -> str:
+        """Phonemize embedded English text for the zh pipeline."""
+        return next(self._pipelines["a"](text)).phonemes
+
     def _get_pipeline(self, lang_code: str) -> KPipeline:
         """Get or create pipeline for language code.
 
@@ -95,11 +114,24 @@ class KokoroV1(BaseModelBackend):
         if not self._model:
             raise RuntimeError("Model not loaded")
 
+        if lang_code == "z" and "a" not in self._pipelines:
+            # 中文模型混读英文时，KPipeline 通过 en_callable 委托英文 pipeline 处理英文片段。
+            logger.info("Creating helper English pipeline for mixed zh-en text")
+            self._pipelines["a"] = KPipeline(
+                lang_code="a", model=False, repo_id=settings.repo_id
+            )
+
         if lang_code not in self._pipelines:
             logger.info(f"Creating new pipeline for language code: {lang_code}")
-            self._pipelines[lang_code] = KPipeline(
-                lang_code=lang_code, model=self._model, device=self._device
-            )
+            pipeline_kwargs = {
+                "lang_code": lang_code,
+                "model": self._model,
+                "device": self._device,
+                "repo_id": settings.repo_id,
+            }
+            if lang_code == "z":
+                pipeline_kwargs["en_callable"] = self._en_callable
+            self._pipelines[lang_code] = KPipeline(**pipeline_kwargs)
         return self._pipelines[lang_code]
 
     async def generate_from_tokens(
@@ -140,9 +172,6 @@ class KokoroV1(BaseModelBackend):
                 if isinstance(voice_data, str):
                     voice_path = voice_data
                 else:
-                    # Save tensor to temporary file
-                    import tempfile
-
                     temp_dir = tempfile.gettempdir()
                     voice_path = os.path.join(temp_dir, f"{voice_name}.pt")
                     # Save tensor with CPU mapping for portability
@@ -151,18 +180,7 @@ class KokoroV1(BaseModelBackend):
                 voice_path = voice
                 voice_name = os.path.splitext(os.path.basename(voice_path))[0]
 
-            # Load voice tensor with caching to avoid repeated file I/O
-            voice_tensor = await self._get_voice_tensor(voice_path)
-            # Save to temp file only if needed (pipeline requires a file path)
-            import tempfile
-
-            temp_dir = tempfile.gettempdir()
-            temp_path = os.path.join(
-                temp_dir, f"temp_voice_{os.path.basename(voice_path)}"
-            )
-            if not os.path.exists(temp_path):
-                await paths.save_voice_tensor(voice_tensor, temp_path)
-            voice_path = temp_path
+            voice_path = await self._stage_voice_file_for_pipeline(voice_path)
 
             # Use provided lang_code, settings voice code override, or first letter of voice name
             if lang_code:  # api is given priority
@@ -238,9 +256,6 @@ class KokoroV1(BaseModelBackend):
                 if isinstance(voice_data, str):
                     voice_path = voice_data
                 else:
-                    # Save tensor to temporary file
-                    import tempfile
-
                     temp_dir = tempfile.gettempdir()
                     voice_path = os.path.join(temp_dir, f"{voice_name}.pt")
                     # Save tensor with CPU mapping for portability
@@ -249,18 +264,7 @@ class KokoroV1(BaseModelBackend):
                 voice_path = voice
                 voice_name = os.path.splitext(os.path.basename(voice_path))[0]
 
-            # Load voice tensor with caching to avoid repeated file I/O
-            voice_tensor = await self._get_voice_tensor(voice_path)
-            # Save to temp file only if needed (pipeline requires a file path)
-            import tempfile
-
-            temp_dir = tempfile.gettempdir()
-            temp_path = os.path.join(
-                temp_dir, f"temp_voice_{os.path.basename(voice_path)}"
-            )
-            if not os.path.exists(temp_path):
-                await paths.save_voice_tensor(voice_tensor, temp_path)
-            voice_path = temp_path
+            voice_path = await self._stage_voice_file_for_pipeline(voice_path)
 
             # Use provided lang_code, settings voice code override, or first letter of voice name
             pipeline_lang_code = (

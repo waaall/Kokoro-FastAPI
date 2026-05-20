@@ -471,12 +471,6 @@ async def list_models():
                 "created": 1686935002,
                 "owned_by": "kokoro",
             },
-            {
-                "id": "gpt-4o-mini-tts",
-                "object": "model",
-                "created": 1686935002,
-                "owned_by": "kokoro",
-            },
         ]
 
         return {"object": "list", "data": models}

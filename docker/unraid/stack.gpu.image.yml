@@ -1,0 +1,30 @@
+name: kokoro-fastapi-zh-gpu
+
+services:
+  kokoro-fastapi:
+    image: ghcr.io/hsiang-han/kokoro-fastapi-zh-gpu:latest
+    container_name: kokoro-fastapi-zh-gpu
+    labels:
+      net.unraid.docker.icon: https://raw.githubusercontent.com/hsiang-han/Kokoro-FastAPI-zh/master/assets/unraid-icon.png
+    volumes:
+      - /mnt/user/appdata/kokoro-fastapi-zh/models:/app/api/src/models
+      - /mnt/user/appdata/kokoro-fastapi-zh/voices:/app/api/src/voices
+    ports:
+      - "8880:8880"
+    environment:
+      - PYTHONPATH=/app:/app/api
+      - USE_GPU=true
+      - PYTHONUNBUFFERED=1
+      - REPO_ID=hexgrad/Kokoro-82M-v1.1-zh
+      - DEFAULT_VOICE=zf_094
+      - KOKORO_V1_FILE=v1_1_zh/kokoro-v1_1-zh.pth
+      - VOICES_DIR=/app/api/src/voices/v1_1_zh
+      - DEFAULT_VOICE_CODE=z
+      - API_LOG_LEVEL=DEBUG
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
